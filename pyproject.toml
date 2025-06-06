@@ -12,4 +12,5 @@ dependencies = [
     "pyinstrument==3.4.2",
     "pyttsx3==2.98",
     "colorama==0.4.5",
+    "scipy==1.9.3",
 ]

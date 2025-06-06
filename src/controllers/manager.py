@@ -71,6 +71,7 @@ class Manager:
 
         # Verificar archivos existentes y generar nuevo nombre
         base_path = Path("src/.samples")
+        print(f"Ruta base: {base_path}")
         base_path.mkdir(parents=True, exist_ok=True)
 
         suffix = ABC_START

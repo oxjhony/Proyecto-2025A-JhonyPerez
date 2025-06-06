@@ -6,3 +6,4 @@ pyinstrument
 pyttsx3
 colorama
 setuptools
+scipy
