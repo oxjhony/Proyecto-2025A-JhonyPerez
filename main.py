@@ -3,6 +3,7 @@
 from src.controllers.manager import Manager
 from src.controllers.strategies.geometric import Geometric
 from src.controllers.strategies.phi import Phi
+from src.models.base.application import aplicacion
 
 def iniciar_n6():
     """
@@ -10,11 +11,12 @@ def iniciar_n6():
     de progreso sin demorar más de ~1 segundo.
     """
     # 6 bits → "bitstrings" de longitud 6
-    estado_inicio = "1000011111"  
-    condiciones   = "1101111011"  
-    alcance       = "1000001111"
-    mecanismo     = "1101011111"
+    estado_inicio = "10000000000000000000"  
+    condiciones   = "11010110111011111111"  
+    alcance       = "11110011111101111111"
+    mecanismo     = "11010110011111011111"
 
+    print("perdio el once pepepepe")
     config = Manager(estado_inicial=estado_inicio)
     geom   = Geometric(config)
     print("\n▶︎Ejecutando Geometric en modo 'verbose' con n = 6 (64 estados)...\n")
@@ -22,8 +24,25 @@ def iniciar_n6():
     print("\n▶︎Solución obtenida:")
     print(solucion)
 
+def generar_red_20A():
+    # Configurar valores necesarios en la aplicación (si no están definidos)
+    aplicacion.pagina_sample_network = "A"
+    aplicacion.semilla_numpy = 42  # Puedes cambiarla si necesitas resultados distintos
+
+    estado_inicial = "0" * 20  # Estado inicial de 20 bits
+
+    # Crear instancia del manejador
+    manager = Manager(estado_inicial=estado_inicial)
+
+    # Forzar generación sin interacción y sin preguntar por reemplazo
+    filename = manager.generar_red(dimensiones=20, datos_discretos=True)
+
+    print(f"✅ Red generada: {filename}")
 
 
 
 if __name__ == "__main__":
+    generar_red_20A()
     iniciar_n6()
+
+
