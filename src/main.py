@@ -4,6 +4,8 @@ from src.controllers.manager import Manager
 from src.controllers.strategies.geometric import Geometric
 from src.controllers.strategies.phi import Phi
 from src.models.base.application import aplicacion
+from src.controllers.strategies.q_nodesM import QNodesMod
+from src.controllers.strategies.q_node_sparce import QNodesFullSparse
 
 def iniciar_n6():
     """
@@ -12,11 +14,10 @@ def iniciar_n6():
     """
     # 6 bits → "bitstrings" de longitud 6
     estado_inicio = "10000000000000000000"  
-    condiciones   = "11010110111011111111"  
-    alcance       = "11110011111101111111"
-    mecanismo     = "11010110011111011111"
+    condiciones   = "11111111111111111111"  
+    alcance       = "01111111111111111110"
+    mecanismo     = "11111111111111111110"
 
-    print("perdio el once pepepepe")
     config = Manager(estado_inicial=estado_inicio)
     geom   = Geometric(config)
     print("\n▶︎Ejecutando Geometric en modo 'verbose' con n = 6 (64 estados)...\n")
@@ -42,7 +43,7 @@ def generar_red_20A():
 
 
 if __name__ == "__main__":
-    generar_red_20A()
+    #generar_red_20A()
     iniciar_n6()
 
 

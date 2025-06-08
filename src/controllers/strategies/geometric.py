@@ -1,138 +1,143 @@
-# src/controllers/strategies/geometric.py
-
 import time
 import numpy as np
-import multiprocessing as mp
-from datetime import datetime
-from numba import njit
-from tqdm import tqdm
-import csv
-
-from src.controllers.manager import Manager
+from typing import Union
 from src.models.base.sia import SIA
+from src.controllers.manager import Manager
+from src.constants.base import EFECTO, ACTUAL, LAST_IDX, INFTY_POS
+from src.funcs.base import emd_efecto
 from src.models.core.solution import Solution
-from src.middlewares.profile import profiler_manager, profile
 from src.middlewares.slogger import SafeLogger
-from src.middlewares.observer import DebugObserver
-from src.funcs.system import biparticiones
-from src.funcs.format import fmt_biparticion
-from src.constants.models import DUMMY_ARR
+from src.funcs.format import fmt_biparte_q
 
-@njit(cache=True)
-def l1_distance(a: np.ndarray, b: np.ndarray) -> float:
-    result = 0.0
-    for i in range(a.size):
-        result += abs(a[i] - b[i])
-    return result
 
-@njit(cache=True)
-def calcular_tabla_costos(tensor: np.ndarray) -> np.ndarray:
-    n = tensor.shape[0]
-    tabla = np.zeros((n, n), dtype=np.float32)
-    for i in range(n):
-        for j in range(n):
-            if i == j:
-                continue
-            d = 0
-            tmp = i ^ j
-            while tmp:
-                d += tmp & 1
-                tmp >>= 1
-            gamma = 2 ** (-d)
-            tabla[i, j] = gamma * abs(tensor[i] - tensor[j])
-    return tabla
-
-def evaluar_biparticion(args):
-    subsistema, dist_subsistema, futuros, presentes = args
-    bip = subsistema.bipartir(
-        np.array(futuros, dtype=np.int8),
-        np.array(presentes, dtype=np.int8)
-    )
-
-    dist_particion = bip.distribucion_marginal()
-    phi = l1_distance(dist_subsistema, dist_particion)
-    return (phi, dist_particion, (tuple(futuros), tuple(presentes)))
-
-@profile(context={"strategy": "geometric"})
 class Geometric(SIA):
-    def __init__(self, config: Manager) -> None:
-        super().__init__(config)
-        profiler_manager.start_session(f"NET{len(config.estado_inicial)}{config.pagina}")
-        self.logger = SafeLogger("geometric")
-        self.debug_observer = DebugObserver()
+    def __init__(self, gestor: Manager):
+        super().__init__(gestor)
+        self.logger = SafeLogger("GEOMETRIC_SIA")
+        self.memoria_omega = dict()
+        self.memoria_particiones = dict()
+        self.vertices: set[tuple]
 
-    def aplicar_estrategia(self, condiciones: str, alcance: str, mecanismo: str) -> Solution:
-        self.sia_tiempo_inicio = time.time()
+    def aplicar_estrategia(self, condicion: str, alcance: str, mecanismo: str):
+        # 1. Descomponer en tensores elementales
+        self.sia_preparar_subsistema(condicion, alcance, mecanismo)
 
-        print("[1] Preparando subsistema y distribuciones...")
-        self.sia_preparar_subsistema(condiciones, alcance, mecanismo)
-        subsistema = self.sia_subsistema
-        dist_subsistema = subsistema.distribucion_marginal()
+        # 2. Calcular tabla de costos (con función t(i, j))
+        futuro = [(EFECTO, i) for i in self.sia_subsistema.indices_ncubos]
+        presente = [(ACTUAL, i) for i in self.sia_subsistema.dims_ncubos]
+        vertices = list(presente + futuro)
+        self.vertices = set(vertices)
 
-        print("[2] Calculando tabla de costos aproximada...")
-        if hasattr(subsistema, 'tensor_principal'):
-            tensor = subsistema.tensor_principal
-        else:
-            tensor = dist_subsistema
+        # 3. Identificar biparticiones candidatas
+        # 4. Evaluar biparticiones usando discrepancia tensorial
+        mejor_particion = self._algorithm(vertices)
 
-        tabla_costos = calcular_tabla_costos(tensor)
-        self.debug_observer.on_tensor_product({
-    "n_cubes": 1,
-    "active_dims": list(range(tensor.shape[0])),
-    "cubes": [type('DummyCube', (), {"indices": list(range(tensor.shape[0])), "dims": list(range(tensor.shape[0])), "data": tabla_costos})()]
-})
-
-        print("[3] Generando biparticiones candidatas geométricas...")
-        futuros = subsistema.indices_ncubos
-        presentes = subsistema.dims_ncubos
-
-        candidatas_list = []
-        for i, b in enumerate(biparticiones(futuros, presentes)):
-            if 2 <= len(b[0]) <= 4 and 2 <= len(b[1]) <= 4 and i % 2 == 0:
-                candidatas_list.append(b)
-            if len(candidatas_list) >= 5000000:
-                break
-
-        print(f"    ▸ Total de biparticiones evaluadas: {len(candidatas_list)}")
-
-        print("[4] Evaluando biparticiones por discrepancia tensorial...")
-        tareas = [(subsistema, dist_subsistema, f, p) for f, p in candidatas_list]
-
-        mejor_phi = np.inf
-        mejor_dist = DUMMY_ARR
-        mejor_bipart = None
-
-        with mp.Pool(processes=mp.cpu_count()) as pool:
-            for resultado in tqdm(pool.imap_unordered(evaluar_biparticion, tareas), total=len(tareas), desc="    ▸ Evaluando"):
-                phi, dist_part, bipart = resultado
-                if phi < mejor_phi:
-                    mejor_phi = phi
-                    mejor_dist = dist_part
-                    mejor_bipart = bipart
-                    if mejor_phi == 0.0:
-                        print("    ▸ φ = 0 encontrado. Finalizando evaluación anticipadamente.")
-                        pool.terminate()
-                        break
-
-        fsel, psel = mejor_bipart
-        dual_p = set(subsistema.dims_ncubos.tolist()) - set(psel)
-        dual_f = set(subsistema.indices_ncubos.tolist()) - set(fsel)
-        bipart_str = fmt_biparticion((fsel, psel), (tuple(dual_f), tuple(dual_p)))
+        # 5. Retornar la mejor bipartición
+        perdida, dist_marginal = self.memoria_particiones[mejor_particion]
+        complementaria = self._nodes_complement(mejor_particion)
         tiempo_total = time.time() - self.sia_tiempo_inicio
-
-        # Descomentar esta sección para guardar resultados en prueba final
-        # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # with open(f"resultados_geometric_{timestamp}.csv", "w", newline="", encoding="utf-8-sig") as f:
-        #     writer = csv.writer(f)
-        #     writer.writerow(["estrategia", "phi", "tiempo", "particion"])
-        #     writer.writerow(["Geometric", mejor_phi, f"{tiempo_total:.2f}", bipart_str])
+        fmt_mip = fmt_biparte_q(list(mejor_particion), complementaria)
 
         return Solution(
-            estrategia="Geometric",
-            perdida=mejor_phi,
-            distribucion_subsistema=dist_subsistema,
-            distribucion_particion=mejor_dist,
-            particion=bipart_str,
+            estrategia="GEOMETRIC",
+            perdida=perdida,
+            distribucion_subsistema=self.sia_dists_marginales,
+            distribucion_particion=dist_marginal,
             tiempo_total=tiempo_total,
-            hablar=True
+            particion=fmt_mip,
         )
+
+    def _algorithm(self, vertices: list[tuple[int, int]]):
+        omegas = [vertices[0]]
+        deltas = vertices[1:]
+        vertices_fase = vertices
+
+        for _ in range(len(vertices_fase) - 2):
+            omegas_ciclo = [vertices_fase[0]]
+            deltas_ciclo = vertices_fase[1:]
+
+            mejor_delta = None
+            mejor_dist = None
+            emd_particion = INFTY_POS
+
+            for _ in range(len(deltas_ciclo) - 1):
+                emd_local = INFTY_POS
+                indice_mejor = -1
+
+                for k, delta in enumerate(deltas_ciclo):
+                    emd_union, emd_delta, dist_delta = self._funcion_submodular(delta, omegas_ciclo)
+                    emd_iter = emd_union - emd_delta
+
+                    if emd_iter < emd_local:
+                        emd_local = emd_iter
+                        indice_mejor = k
+                        emd_particion = emd_delta
+                        mejor_dist = dist_delta
+
+                omegas_ciclo.append(deltas_ciclo[indice_mejor])
+                deltas_ciclo.pop(indice_mejor)
+
+            clave = tuple(
+                deltas_ciclo[LAST_IDX]
+                if isinstance(deltas_ciclo[LAST_IDX], list)
+                else deltas_ciclo
+            )
+            self.memoria_particiones[clave] = (emd_particion, mejor_dist)
+
+            if emd_particion <= 0.01:
+                self.logger.info("Partición con pérdida mínima encontrada.")
+                return min(self.memoria_particiones, key=lambda k: self.memoria_particiones[k][0])
+
+            nuevo = (
+                [omegas_ciclo[LAST_IDX]] if isinstance(omegas_ciclo[LAST_IDX], tuple)
+                else omegas_ciclo[LAST_IDX]
+            ) + (
+                [deltas_ciclo[LAST_IDX]] if isinstance(deltas_ciclo[LAST_IDX], tuple)
+                else deltas_ciclo[LAST_IDX]
+            )
+            omegas_ciclo.pop()
+            omegas_ciclo.append(nuevo)
+            vertices_fase = omegas_ciclo
+
+        return min(self.memoria_particiones, key=lambda k: self.memoria_particiones[k][0])
+
+    def _funcion_submodular(
+        self, deltas: Union[tuple, list[tuple]], omegas: list[Union[tuple, list[tuple]]]
+    ):
+        clave = (tuple(deltas), tuple(map(tuple, omegas)))
+        if clave in self.memoria_omega:
+            return self.memoria_omega[clave]
+
+        temp = [[], []]
+        if isinstance(deltas, tuple):
+            temp[deltas[0]].append(deltas[1])
+        else:
+            for d in deltas:
+                temp[d[0]].append(d[1])
+
+        part_delta = self.sia_subsistema.bipartir(
+            np.array(temp[EFECTO], dtype=np.int8),
+            np.array(temp[ACTUAL], dtype=np.int8),
+        )
+        dist_delta = part_delta.distribucion_marginal()
+        emd_delta = emd_efecto(dist_delta, self.sia_dists_marginales)
+
+        for omega in omegas:
+            if isinstance(omega, list):
+                for o in omega:
+                    temp[o[0]].append(o[1])
+            else:
+                temp[omega[0]].append(omega[1])
+
+        part_union = self.sia_subsistema.bipartir(
+            np.array(temp[EFECTO], dtype=np.int8),
+            np.array(temp[ACTUAL], dtype=np.int8),
+        )
+        dist_union = part_union.distribucion_marginal()
+        emd_union = emd_efecto(dist_union, self.sia_dists_marginales)
+
+        self.memoria_omega[clave] = (emd_union, emd_delta, dist_delta)
+        return emd_union, emd_delta, dist_delta
+
+    def _nodes_complement(self, nodes: list[tuple[int, int]]):
+        return list(self.vertices - set(nodes))

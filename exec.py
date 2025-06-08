@@ -1,6 +1,6 @@
 from src.middlewares.profile import profiler_manager
 from src.models.base.application import aplicacion
-from src.main import iniciar
+from src.main import iniciar_n6
 
 
 def main():
@@ -9,7 +9,7 @@ def main():
 
     # aplicacion.pagina_sample_network = "B"
 
-    iniciar()
+    iniciar_n6()
 
 
 if __name__ == "__main__":
