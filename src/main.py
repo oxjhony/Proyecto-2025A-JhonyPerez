@@ -15,8 +15,8 @@ def iniciar_n6():
     # 6 bits → "bitstrings" de longitud 6
     estado_inicio = "10000000000000000000"  
     condiciones   = "11111111111111111111"  
-    alcance       = "01111111111111111110"
-    mecanismo     = "11111111111111111110"
+    alcance       = "10101010101010101010"
+    mecanismo     = "11111111111111111111"
 
     config = Manager(estado_inicial=estado_inicio)
     geom   = Geometric(config)
